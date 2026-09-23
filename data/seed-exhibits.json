@@ -1,0 +1,7 @@
+[
+  {"id":"1","title":"Кухоль із суницями","period":"Порцеляна · музейна збірка","category":"Чашки","summary":"Білий порцеляновий кухоль із ручним розписом, позолоченим краєм та рослинним мотивом.","model":"/models/porcelain-cup.glb","poster":"/exhibits/strawberry-cup.png","cameraOrbit":"30deg 72deg 2.5m"},
+  {"id":"2","title":"Порцелянова чашка","period":"Столовий посуд","category":"Чашки","summary":"Оцифрована чашка з колекції столового посуду. Модель можна повертати та наближати.","model":"/models/porcelain-teacup.glb","cameraOrbit":"25deg 70deg 2.4m"},
+  {"id":"3","title":"Порцеляновий чайник","period":"Чайний сервіз","category":"Чайники","summary":"Предмет чайного сервізу, відтворений у тривимірному форматі для детального огляду.","model":"/models/porcelain-teapot.glb","cameraOrbit":"25deg 70deg 3m"},
+  {"id":"4","title":"Керамічна посудина","period":"Господарський посуд","category":"Посудини","summary":"Керамічна форма з музейної добірки побутових речей Кореччини.","model":"/models/ceramic-vessel.glb","cameraOrbit":"25deg 70deg 3m"},
+  {"id":"5","title":"Декоративна ваза","period":"Декоративне мистецтво","category":"Посудини","summary":"Орнаментована ваза, представлена як інтерактивна цифрова копія музейного предмета.","model":"/models/ornate-vase.glb","cameraOrbit":"25deg 70deg 3m"}
+]
