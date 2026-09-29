@@ -175,7 +175,7 @@ export default function Home() {
     </section>
   </main>;
 
-  return <main className="museum-shell">
+  return <main className="museum-shell catalog-shell">
     <header className="museum-header"><a className="museum-brand" href="#catalog" aria-label="На початок каталогу"><span className="museum-mark" aria-hidden="true"><i /><i /><i /></span><span><strong>МУЗЕЙ КОРЦЯ</strong><small>ЦИФРОВА КОЛЕКЦІЯ</small></span></a><div className="header-actions"><span className="collection-count">{exhibits.length} ЕКСПОНАТІВ</span><Button variant="ghost" size="icon-lg" className="header-icon" onClick={toggleFullscreen} aria-label={fullscreen ? 'Вийти з повноекранного режиму' : 'Відкрити на весь екран'} title={fullscreen ? 'Вийти з повноекранного режиму' : 'На весь екран'}>{fullscreen ? <Minimize2 /> : <Maximize2 />}</Button><Button variant="ghost" size="icon-lg" className="header-icon" onClick={openAdmin} aria-label="Відкрити панель адміністратора" title="Для працівників музею"><Settings2 /></Button></div></header>
     <section className="catalog-intro" id="catalog"><div><p className="eyebrow">КОРЕЦЬКА ПОРЦЕЛЯНА ТА КЕРАМІКА</p><h1>Колекція посуду</h1></div><p className="intro-copy">Оберіть предмет, щоб роздивитися його у 3D.</p></section>
     <section className="exhibit-grid" aria-live="polite">{exhibits.map((exhibit, index) => <button className="exhibit-card" key={exhibit.id} onClick={() => setSelected(exhibit)} type="button"><span className="model-tile"><ModelPreview exhibit={exhibit} /></span><span className="card-copy"><small>{exhibit.category} · {String(index + 1).padStart(2, '0')}</small><strong>{exhibit.title}</strong><span>{exhibit.period}<ChevronRight /></span></span></button>)}</section>
