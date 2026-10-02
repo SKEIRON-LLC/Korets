@@ -11,6 +11,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = process.env.KORETS_DATA_DIR || join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'KoretsMuseum');
 const assetDir = join(dataDir, 'assets');
 const catalogPath = join(dataDir, 'exhibits.json');
+const articlesPath = join(dataDir, 'articles.json');
 const adminPath = join(dataDir, 'admin.json');
 const sessions = new Map();
 const maxUpload = 100 * 1024 * 1024;
@@ -29,6 +30,7 @@ function allowedOrigin(origin) {
 
 await mkdir(assetDir, { recursive: true });
 try { await stat(catalogPath); } catch { await copyFile(join(root, 'data', 'seed-exhibits.json'), catalogPath); }
+try { await stat(articlesPath); } catch { await writeFile(articlesPath, '[]'); }
 
 function send(res, status, value, extra = {}) {
   const body = JSON.stringify(value);
@@ -51,6 +53,12 @@ async function saveCatalog(items) {
   const temp = `${catalogPath}.${randomUUID()}.tmp`;
   await writeFile(temp, JSON.stringify(items, null, 2));
   await rename(temp, catalogPath);
+}
+async function articles() { return JSON.parse(await readFile(articlesPath, 'utf8')); }
+async function saveArticles(items) {
+  const temp = `${articlesPath}.${randomUUID()}.tmp`;
+  await writeFile(temp, JSON.stringify(items, null, 2));
+  await rename(temp, articlesPath);
 }
 function authorized(req) {
   const cookie = req.headers.cookie?.match(/(?:^|; )museum_session=([a-f0-9]+)/)?.[1];
@@ -75,6 +83,32 @@ function validate(item, existingId) {
   if (normalizedPoster && !(/^\/exhibits\/[\w.-]+$/.test(normalizedPoster) || validAsset(normalizedPoster, '(png|jpg|jpeg|webp)'))) return null;
   return { id: existingId || randomUUID(), title, period, category, summary, model: normalizedModel, ...(normalizedPoster ? { poster: normalizedPoster } : {}), cameraOrbit: '25deg 70deg 2.8m' };
 }
+function validateArticle(item, existingId) {
+  if (!item || typeof item !== 'object') return null;
+  const title = String(item.title || '').trim().slice(0, 160);
+  const subtitle = String(item.subtitle || '').trim().slice(0, 600);
+  const category = String(item.category || '').trim().slice(0, 80);
+  const normalizeAsset = (path) => String(path || '').replace(new RegExp(`^http://(?:localhost|127\\.0\\.0\\.1):${port}(/assets/)`), '$1');
+  const validImage = (path) => !path || /^\/assets\/[a-f0-9-]+\.(png|jpg|jpeg|webp)$/.test(path);
+  const cover = normalizeAsset(item.cover);
+  if (!title || !validImage(cover) || !Array.isArray(item.blocks)) return null;
+  const blocks = item.blocks.slice(0, 80).map((block) => {
+    if (!block || typeof block !== 'object') return null;
+    const type = String(block.type || '');
+    const id = /^[a-zA-Z0-9-]{1,80}$/.test(String(block.id || '')) ? String(block.id) : randomUUID();
+    if (type === 'heading') return { id, type, text: String(block.text || '').trim().slice(0, 240) };
+    if (type === 'paragraph') return { id, type, text: String(block.text || '').trim().slice(0, 6000) };
+    if (type === 'quote') return { id, type, text: String(block.text || '').trim().slice(0, 1800) };
+    if (type === 'image') {
+      const image = normalizeAsset(block.image);
+      if (!image || !validImage(image)) return null;
+      return { id, type, image, caption: String(block.caption || '').trim().slice(0, 400) };
+    }
+    return null;
+  }).filter(Boolean);
+  if (blocks.length !== item.blocks.slice(0, 80).length) return null;
+  return { id: existingId || randomUUID(), title, subtitle, category, ...(cover ? { cover } : {}), blocks };
+}
 
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
@@ -94,6 +128,7 @@ const server = http.createServer(async (req, res) => {
       send(res, 200, { ok: true, pinReady }); return;
     }
     if (url.pathname === '/api/exhibits' && req.method === 'GET') { send(res, 200, await catalog()); return; }
+    if (url.pathname === '/api/articles' && req.method === 'GET') { send(res, 200, await articles()); return; }
     if (url.pathname.startsWith('/assets/') && req.method === 'GET') {
       const name = url.pathname.slice('/assets/'.length);
       if (!/^[a-f0-9-]+\.(glb|png|jpg|jpeg|webp)$/.test(name)) { fail(res, 404, 'Не знайдено'); return; }
@@ -156,6 +191,25 @@ const server = http.createServer(async (req, res) => {
       const items = await catalog(); const next = items.filter((item) => item.id !== match[1]);
       if (next.length === items.length) { fail(res, 404, 'Експонат не знайдено'); return; }
       await saveCatalog(next); send(res, 200, { ok: true }); return;
+    }
+    if (url.pathname === '/api/articles' && req.method === 'POST') {
+      const item = validateArticle(await readJson(req, 512 * 1024));
+      if (!item) { fail(res, 400, 'Перевірте назву, текстові блоки та зображення'); return; }
+      const items = await articles(); items.push(item); await saveArticles(items);
+      send(res, 201, item); return;
+    }
+    const articleMatch = url.pathname.match(/^\/api\/articles\/([\w-]+)$/);
+    if (articleMatch && req.method === 'PUT') {
+      const items = await articles(); const index = items.findIndex((item) => item.id === articleMatch[1]);
+      if (index < 0) { fail(res, 404, 'Статтю не знайдено'); return; }
+      const item = validateArticle(await readJson(req, 512 * 1024), articleMatch[1]);
+      if (!item) { fail(res, 400, 'Перевірте назву, текстові блоки та зображення'); return; }
+      items[index] = item; await saveArticles(items); send(res, 200, item); return;
+    }
+    if (articleMatch && req.method === 'DELETE') {
+      const items = await articles(); const next = items.filter((item) => item.id !== articleMatch[1]);
+      if (next.length === items.length) { fail(res, 404, 'Статтю не знайдено'); return; }
+      await saveArticles(next); send(res, 200, { ok: true }); return;
     }
     fail(res, 404, 'Не знайдено');
   } catch (error) {
