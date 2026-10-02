@@ -7,15 +7,16 @@ import seedExhibits from '@/data/seed-exhibits.json';
 
 type Exhibit = { id: string; title: string; period: string; category: string; summary: string; model: string; poster?: string; cameraOrbit?: string };
 type ExhibitDraft = { title: string; period: string; category: string; summary: string; model: string; poster: string };
-type BlockType = 'heading' | 'paragraph' | 'quote' | 'image';
-type ArticleBlock = { id: string; type: BlockType; text?: string; image?: string; caption?: string };
+type BlockType = 'markdown' | 'heading' | 'paragraph' | 'quote' | 'image';
+type ImageLayout = 'full' | 'left' | 'right';
+type ArticleBlock = { id: string; type: BlockType; text?: string; image?: string; caption?: string; layout?: ImageLayout };
 type ArticleBlockDraft = ArticleBlock & { file?: File };
-type Article = { id: string; title: string; subtitle: string; category: string; cover?: string; blocks: ArticleBlock[] };
-type ArticleDraft = { title: string; subtitle: string; category: string; cover: string; blocks: ArticleBlockDraft[] };
+type Article = { id: string; title: string; subtitle?: string; category: string; cover?: string; blocks: ArticleBlock[] };
+type ArticleDraft = { title: string; category: string; cover: string; blocks: ArticleBlockDraft[] };
 type CollectionView = 'exhibits' | 'articles';
 
 const blankExhibit: ExhibitDraft = { title: '', period: '', category: '', summary: '', model: '', poster: '' };
-const blankArticle = (): ArticleDraft => ({ title: '', subtitle: '', category: '', cover: '', blocks: [] });
+const blankArticle = (): ArticleDraft => ({ title: '', category: '', cover: '', blocks: [] });
 const blockId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
 function apiBase() {
@@ -42,6 +43,57 @@ function Brand({ admin = false, linked = false }: { admin?: boolean; linked?: bo
   return linked ? <a className="museum-brand" href="#catalog" aria-label="На початок каталогу">{content}</a> : <span className="museum-brand">{content}</span>;
 }
 
+function InlineMarkdown({ text }: { text: string }) {
+  return <>{text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('*') && part.endsWith('*')) return <em key={index}>{part.slice(1, -1)}</em>;
+    return <span key={index}>{part}</span>;
+  })}</>;
+}
+
+function MarkdownText({ text }: { text: string }) {
+  const lines = text.split(/\r?\n/);
+  const nodes: React.ReactNode[] = [];
+  let paragraph: string[] = [];
+  let list: string[] = [];
+  let ordered = false;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    const value = paragraph.join(' '); paragraph = [];
+    nodes.push(<p key={`p-${nodes.length}`}><InlineMarkdown text={value} /></p>);
+  };
+  const flushList = () => {
+    if (!list.length) return;
+    const Tag = ordered ? 'ol' : 'ul'; const values = list; list = [];
+    nodes.push(<Tag key={`l-${nodes.length}`}>{values.map((value, index) => <li key={index}><InlineMarkdown text={value} /></li>)}</Tag>);
+  };
+  lines.forEach((line) => {
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    const bullet = line.match(/^[-*]\s+(.+)$/);
+    const number = line.match(/^\d+\.\s+(.+)$/);
+    if (!line.trim()) { flushParagraph(); flushList(); return; }
+    if (heading) {
+      flushParagraph(); flushList();
+      const Tag = `h${heading[1].length + 1}` as 'h2' | 'h3' | 'h4';
+      nodes.push(<Tag key={`h-${nodes.length}`}><InlineMarkdown text={heading[2]} /></Tag>); return;
+    }
+    if (bullet || number) {
+      flushParagraph();
+      const nextOrdered = Boolean(number);
+      if (list.length && ordered !== nextOrdered) flushList();
+      ordered = nextOrdered; list.push((bullet || number)![1]); return;
+    }
+    flushList(); paragraph.push(line.trim());
+  });
+  flushParagraph(); flushList();
+  return <div className="markdown-copy">{nodes}</div>;
+}
+
+function MarkdownToolbar({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const add = (snippet: string) => onChange(`${value}${value && !value.endsWith('\n') ? '\n' : ''}${snippet}`);
+  return <div className="markdown-toolbar"><button type="button" onClick={() => add('## Заголовок')}>H2</button><button type="button" onClick={() => add('**жирний текст**')}><strong>B</strong></button><button type="button" onClick={() => add('*курсив*')}><em>I</em></button><button type="button" onClick={() => add('- пункт списку')}>• Список</button></div>;
+}
+
 function ModelPreview({ exhibit, interactive = false }: { exhibit: Exhibit; interactive?: boolean }) {
   const [ready, setReady] = useState(false);
   useEffect(() => {
@@ -49,6 +101,7 @@ function ModelPreview({ exhibit, interactive = false }: { exhibit: Exhibit; inte
     import('@google/model-viewer').then(() => active && setReady(true)).catch(() => active && setReady(false));
     return () => { active = false; };
   }, []);
+
   if (!ready) return exhibit.poster
     ? <img className="model-poster" src={assetUrl(exhibit.poster)} alt={exhibit.title} />
     : <span className="model-loading" aria-label="Завантаження 3D-моделі"><Box /></span>;
@@ -102,6 +155,10 @@ export default function Home() {
     document.addEventListener('fullscreenchange', onFullScreenChange);
     return () => document.removeEventListener('fullscreenchange', onFullScreenChange);
   }, []);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0 });
+  }, [selected, selectedArticle, adminOpen, collectionView]);
 
   async function toggleFullscreen() {
     try { if (document.fullscreenElement) await document.exitFullscreen(); else await document.documentElement.requestFullscreen(); }
@@ -159,11 +216,11 @@ export default function Home() {
 
   function editArticle(item?: Article) {
     setEditingArticleId(item?.id || null);
-    setArticleForm(item ? { title: item.title, subtitle: item.subtitle, category: item.category, cover: item.cover || '', blocks: item.blocks.map((block) => ({ ...block })) } : blankArticle());
+    setArticleForm(item ? { title: item.title, category: item.category, cover: item.cover || '', blocks: item.blocks.map((block) => block.type === 'heading' ? { ...block, type: 'markdown', text: `## ${block.text || ''}` } : block.type === 'paragraph' ? { ...block, type: 'markdown' } : { ...block, layout: block.type === 'image' ? block.layout || 'full' : block.layout }) } : blankArticle());
     setArticleCoverFile(null); setNotice('');
   }
   function addBlock(type: BlockType) {
-    setArticleForm((current) => ({ ...current, blocks: [...current.blocks, { id: blockId(), type, text: type === 'image' ? undefined : '', image: type === 'image' ? '' : undefined, caption: type === 'image' ? '' : undefined }] }));
+    setArticleForm((current) => ({ ...current, blocks: [...current.blocks, { id: blockId(), type, text: '', image: type === 'image' ? '' : undefined, caption: type === 'image' ? '' : undefined, layout: type === 'image' ? 'full' : undefined }] }));
   }
   function updateBlock(index: number, patch: Partial<ArticleBlockDraft>) {
     setArticleForm((current) => ({ ...current, blocks: current.blocks.map((block, blockIndex) => blockIndex === index ? { ...block, ...patch } : block) }));
@@ -183,7 +240,7 @@ export default function Home() {
       const cover = articleCoverFile ? await upload(articleCoverFile) : articleForm.cover;
       const blocks = await Promise.all(articleForm.blocks.map(async ({ file, ...block }) => block.type === 'image' && file ? { ...block, image: await upload(file) } : block));
       if (blocks.some((block) => block.type === 'image' && !block.image)) { setNotice('Додайте файл до кожного блоку зображення.'); setBusy(false); return; }
-      const next = { title: articleForm.title, subtitle: articleForm.subtitle, category: articleForm.category, cover, blocks };
+      const next = { title: articleForm.title, subtitle: '', category: articleForm.category, cover, blocks };
       const item = await apiRequest<Article>(editingArticleId ? `/api/articles/${editingArticleId}` : '/api/articles', { method: editingArticleId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
       setArticles((items) => editingArticleId ? items.map((old) => old.id === editingArticleId ? item : old) : [...items, item]);
       editArticle(); setNotice('Статтю збережено та опубліковано.');
@@ -203,7 +260,31 @@ export default function Home() {
   }
 
   function articleWorkspace() {
-    return <div className="admin-workspace article-admin-workspace"><aside className="admin-list"><div className="admin-list-top"><div><small>{articles.length} опубліковано</small><strong>Статті</strong></div><Button onClick={() => editArticle()}><Plus /> Додати</Button></div><div className="admin-items">{articles.length ? articles.map((item) => <button key={item.id} type="button" className={editingArticleId === item.id ? 'admin-item active' : 'admin-item'} onClick={() => editArticle(item)}><span>{item.title}<small>{item.category || 'Без категорії'}</small></span><ChevronRight /></button>) : <p className="admin-empty">Статей ще немає. Створіть першу історію.</p>}</div></aside><div className="admin-form article-editor"><div className="admin-form-title"><div><small>{editingArticleId ? 'ОБРАНА СТАТТЯ' : 'НОВА СТАТТЯ'}</small><h2>{editingArticleId ? 'Редагувати статтю' : 'Створити статтю'}</h2></div>{editingArticleId && <Button variant="outline" onClick={removeArticle} disabled={busy}><Trash2 /> Видалити</Button>}</div><label>Назва<input value={articleForm.title} onChange={(event) => setArticleForm({ ...articleForm, title: event.target.value })} maxLength={160} placeholder="Ім’я людини або назва історії" /></label><div className="admin-form-row"><label>Розділ<input value={articleForm.category} onChange={(event) => setArticleForm({ ...articleForm, category: event.target.value })} maxLength={80} placeholder="Наприклад, Видатні постаті" /></label><label>Головне зображення<input type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" onChange={(event) => setArticleCoverFile(event.target.files?.[0] || null)} /><small>{articleCoverFile?.name || (articleForm.cover ? 'Поточне фото збережеться' : 'Необов’язково')}</small></label></div><label>Короткий вступ<textarea value={articleForm.subtitle} onChange={(event) => setArticleForm({ ...articleForm, subtitle: event.target.value })} maxLength={600} rows={2} placeholder="Короткий текст для картки та початку сторінки" /></label><div className="block-editor-heading"><div><small>ВМІСТ СТАТТІ</small><strong>Блоки сторінки</strong></div><div className="block-add-buttons"><button type="button" onClick={() => addBlock('heading')}><Type /> Заголовок</button><button type="button" onClick={() => addBlock('paragraph')}><BookOpen /> Текст</button><button type="button" onClick={() => addBlock('image')}><ImageIcon /> Фото</button><button type="button" onClick={() => addBlock('quote')}><Quote /> Цитата</button></div></div><div className="article-block-list">{articleForm.blocks.length ? articleForm.blocks.map((block, index) => <div className="article-block-editor" key={block.id}><div className="article-block-toolbar"><strong>{({ heading: 'Заголовок', paragraph: 'Текст', image: 'Зображення', quote: 'Цитата' } as Record<BlockType, string>)[block.type]}</strong><span><button type="button" onClick={() => moveBlock(index, -1)} disabled={index === 0} aria-label="Перемістити вище"><ArrowUp /></button><button type="button" onClick={() => moveBlock(index, 1)} disabled={index === articleForm.blocks.length - 1} aria-label="Перемістити нижче"><ArrowDown /></button><button type="button" onClick={() => setArticleForm((current) => ({ ...current, blocks: current.blocks.filter((_, blockIndex) => blockIndex !== index) }))} aria-label="Видалити блок"><Trash2 /></button></span></div>{block.type === 'image' ? <div className="image-block-fields"><label>Файл<input type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" onChange={(event) => updateBlock(index, { file: event.target.files?.[0] || undefined })} /><small>{block.file?.name || (block.image ? 'Поточне зображення збережеться' : 'Оберіть зображення')}</small></label><label>Підпис<input value={block.caption || ''} onChange={(event) => updateBlock(index, { caption: event.target.value })} maxLength={400} /></label></div> : <textarea value={block.text || ''} onChange={(event) => updateBlock(index, { text: event.target.value })} rows={block.type === 'paragraph' ? 5 : 2} maxLength={block.type === 'paragraph' ? 6000 : block.type === 'quote' ? 1800 : 240} placeholder={block.type === 'heading' ? 'Назва розділу' : block.type === 'quote' ? 'Текст цитати' : 'Текст абзацу'} />}</div>) : <div className="blocks-empty"><BookOpen /><p>Додайте заголовок, текст, фото або цитату.</p></div>}</div><div className="admin-form-actions"><Button onClick={saveArticle} disabled={busy}>{busy ? 'Зачекайте…' : 'Зберегти й опублікувати'}</Button><span>Блоки можна пересувати стрілками та редагувати у будь-який час.</span></div>{notice && <p className="admin-notice" role="status">{notice}</p>}</div></div>;
+    return <div className="admin-workspace article-admin-workspace">
+      <aside className="admin-list"><div className="admin-list-top"><div><small>{articles.length} опубліковано</small><strong>Статті</strong></div><Button onClick={() => editArticle()}><Plus /> Додати</Button></div><div className="admin-items">{articles.length ? articles.map((item) => <button key={item.id} type="button" className={editingArticleId === item.id ? 'admin-item active' : 'admin-item'} onClick={() => editArticle(item)}><span>{item.title}<small>{item.category || 'Без категорії'}</small></span><ChevronRight /></button>) : <p className="admin-empty">Статей ще немає. Створіть першу історію.</p>}</div></aside>
+      <div className="admin-form article-editor">
+        <div className="admin-form-title"><div><small>{editingArticleId ? 'ОБРАНА СТАТТЯ' : 'НОВА СТАТТЯ'}</small><h2>{editingArticleId ? 'Редагувати статтю' : 'Створити статтю'}</h2></div>{editingArticleId && <Button variant="outline" onClick={removeArticle} disabled={busy}><Trash2 /> Видалити</Button>}</div>
+        <div className="admin-form-row"><label>Назва<input value={articleForm.title} onChange={(event) => setArticleForm({ ...articleForm, title: event.target.value })} maxLength={160} placeholder="Ім’я людини або назва історії" /></label><label>Розділ<input value={articleForm.category} onChange={(event) => setArticleForm({ ...articleForm, category: event.target.value })} maxLength={80} placeholder="Наприклад, Видатні постаті" /></label></div>
+        <label>Мініатюра для головної сторінки<input type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" onChange={(event) => setArticleCoverFile(event.target.files?.[0] || null)} /><small>{articleCoverFile?.name || (articleForm.cover ? 'Поточна мініатюра збережеться' : 'Необов’язково — у самій статті вона не показується')}</small></label>
+        <div className="block-editor-heading"><div><small>ВМІСТ СТАТТІ</small><strong>Блоки сторінки</strong></div><div className="block-add-buttons"><button type="button" onClick={() => addBlock('markdown')}><Type /> Текст Markdown</button><button type="button" onClick={() => addBlock('image')}><ImageIcon /> Фото</button><button type="button" onClick={() => addBlock('quote')}><Quote /> Цитата</button></div></div>
+        <div className="markdown-help"><strong>Форматування:</strong><code># Великий заголовок</code><code>## Підзаголовок</code><code>**жирний**</code><code>*курсив*</code><code>- список</code></div>
+        <div className="article-block-list">{articleForm.blocks.length ? articleForm.blocks.map((block, index) => <div className="article-block-editor" key={block.id}>
+          <div className="article-block-toolbar"><strong>{block.type === 'image' ? 'Зображення' : block.type === 'quote' ? 'Цитата' : 'Текст Markdown'}</strong><span><button type="button" onClick={() => moveBlock(index, -1)} disabled={index === 0} aria-label="Перемістити вище"><ArrowUp /></button><button type="button" onClick={() => moveBlock(index, 1)} disabled={index === articleForm.blocks.length - 1} aria-label="Перемістити нижче"><ArrowDown /></button><button type="button" onClick={() => setArticleForm((current) => ({ ...current, blocks: current.blocks.filter((_, blockIndex) => blockIndex !== index) }))} aria-label="Видалити блок"><Trash2 /></button></span></div>
+          {block.type === 'image' ? <div className="image-block-fields image-layout-fields"><label>Файл<input type="file" accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" onChange={(event) => updateBlock(index, { file: event.target.files?.[0] || undefined })} /><small>{block.file?.name || (block.image ? 'Поточне зображення збережеться' : 'Оберіть зображення')}</small></label><label>Розташування<select value={block.layout || 'full'} onChange={(event) => updateBlock(index, { layout: event.target.value as ImageLayout })}><option value="full">На всю ширину</option><option value="left">Фото ліворуч, текст праворуч</option><option value="right">Текст ліворуч, фото праворуч</option></select></label><label>Підпис<input value={block.caption || ''} onChange={(event) => updateBlock(index, { caption: event.target.value })} maxLength={400} /></label>{block.layout !== 'full' && <label className="image-side-text">Текст поруч із фото<MarkdownToolbar value={block.text || ''} onChange={(text) => updateBlock(index, { text })} /><textarea value={block.text || ''} onChange={(event) => updateBlock(index, { text: event.target.value })} rows={6} maxLength={6000} placeholder="## Підзаголовок&#10;&#10;Текст поруч із зображенням…" /></label>}</div> : <>{block.type === 'markdown' && <MarkdownToolbar value={block.text || ''} onChange={(text) => updateBlock(index, { text })} />}<textarea value={block.text || ''} onChange={(event) => updateBlock(index, { text: event.target.value })} rows={block.type === 'quote' ? 3 : 7} maxLength={block.type === 'quote' ? 1800 : 6000} placeholder={block.type === 'quote' ? 'Текст цитати' : '# Заголовок\n\nОсновний текст із **виділенням**…'} /></>}
+        </div>) : <div className="blocks-empty"><BookOpen /><p>Додайте текст, фото або цитату.</p></div>}</div>
+        <div className="admin-form-actions"><Button onClick={saveArticle} disabled={busy}>{busy ? 'Зачекайте…' : 'Зберегти й опублікувати'}</Button><span>Мініатюра показується лише на головній. Вміст статті будується з блоків нижче.</span></div>{notice && <p className="admin-notice" role="status">{notice}</p>}
+      </div>
+    </div>;
+  }
+
+  function articleBlock(block: ArticleBlock) {
+    if (block.type === 'markdown') return <MarkdownText key={block.id} text={block.text || ''} />;
+    if (block.type === 'heading') return <h2 key={block.id}>{block.text}</h2>;
+    if (block.type === 'paragraph') return <p key={block.id}>{block.text}</p>;
+    if (block.type === 'quote') return <blockquote key={block.id}>{block.text}</blockquote>;
+    const figure = <figure><img src={assetUrl(block.image)} alt={block.caption || selectedArticle?.title || ''} />{block.caption && <figcaption>{block.caption}</figcaption>}</figure>;
+    if (!block.layout || block.layout === 'full') return <div className="article-media-full" key={block.id}>{figure}</div>;
+    return <section className={`article-media-split image-${block.layout}`} key={block.id}><div className="article-media-copy"><MarkdownText text={block.text || ''} /></div>{figure}</section>;
   }
 
   if (adminOpen) return <main className="museum-shell admin-shell">
@@ -222,8 +303,8 @@ export default function Home() {
 
   if (selected) return <main className="museum-shell detail-shell"><header className="museum-header detail-header"><Brand />{fullscreenButton}</header><section className="exhibit-page"><div className="exhibit-information"><div><p className="eyebrow">{selected.category} · {selected.period}</p><h1>{selected.title}</h1><p className="exhibit-summary">{selected.summary}</p><div className="touch-instructions"><Hand /><span><strong>Огляд у 3D</strong>Проведіть пальцем, щоб обертати. Розведіть два пальці, щоб наблизити.</span></div></div><Button className="detail-back" onClick={() => setSelected(null)}><ArrowLeft /> Повернутися до колекції</Button></div><div className="detail-model-stage"><ModelPreview exhibit={selected} interactive /><span className="gesture-hint"><Hand /> Обертайте предмет пальцем</span></div></section></main>;
 
-  if (selectedArticle) return <main className="museum-shell article-shell"><header className="museum-header detail-header"><Brand />{fullscreenButton}</header><section className="article-page"><aside className="article-profile">{selectedArticle.cover ? <img src={assetUrl(selectedArticle.cover)} alt={selectedArticle.title} /> : <div className="article-cover-placeholder"><BookOpen /></div>}<div className="article-profile-copy"><p className="eyebrow">{selectedArticle.category || 'ЛЮДИ ТА ІСТОРІЇ'}</p><h1>{selectedArticle.title}</h1>{selectedArticle.subtitle && <p>{selectedArticle.subtitle}</p>}</div><Button className="detail-back" onClick={() => setSelectedArticle(null)}><ArrowLeft /> Повернутися до історій</Button></aside><article className="article-content">{selectedArticle.blocks.length ? selectedArticle.blocks.map((block) => block.type === 'heading' ? <h2 key={block.id}>{block.text}</h2> : block.type === 'paragraph' ? <p key={block.id}>{block.text}</p> : block.type === 'quote' ? <blockquote key={block.id}>{block.text}</blockquote> : <figure key={block.id}><img src={assetUrl(block.image)} alt={block.caption || selectedArticle.title} />{block.caption && <figcaption>{block.caption}</figcaption>}</figure>) : <p className="article-empty-copy">Матеріал цієї сторінки ще готується.</p>}</article></section></main>;
+  if (selectedArticle) return <main className="museum-shell article-shell"><header className="museum-header detail-header"><Brand />{fullscreenButton}</header><section className="article-reading-page"><div className="article-reading-heading"><p className="eyebrow">{selectedArticle.category || 'ЛЮДИ ТА ІСТОРІЇ'}</p><h1>{selectedArticle.title}</h1></div><article className="article-content article-reading-content"><div className="article-content-inner">{selectedArticle.blocks.length ? selectedArticle.blocks.map(articleBlock) : <p className="article-empty-copy">Матеріал цієї сторінки ще готується.</p>}</div></article><Button className="detail-back article-floating-back" onClick={() => setSelectedArticle(null)}><ArrowLeft /> Повернутися до історій</Button></section></main>;
 
   const showingArticles = collectionView === 'articles';
-  return <main className="museum-shell catalog-shell"><header className="museum-header"><Brand linked /><div className="header-actions"><span className="collection-count">{showingArticles ? articles.length : exhibits.length} {showingArticles ? 'ІСТОРІЙ' : 'ЕКСПОНАТІВ'}</span>{fullscreenButton}<Button variant="ghost" size="icon-lg" className="header-icon" onClick={openAdmin} aria-label="Відкрити панель адміністратора"><Settings2 /></Button></div></header><section className="catalog-intro" id="catalog"><div><p className="eyebrow">{showingArticles ? 'ЛЮДИ, ПОДІЇ ТА ІСТОРІЯ КОРЦЯ' : 'КОРЕЦЬКА ПОРЦЕЛЯНА ТА КЕРАМІКА'}</p><h1>{showingArticles ? 'Люди та історії' : 'Колекція посуду'}</h1></div><nav className="catalog-tabs" aria-label="Розділи колекції"><button className={!showingArticles ? 'active' : ''} onClick={() => setCollectionView('exhibits')}><Box /> 3D-колекція</button><button className={showingArticles ? 'active' : ''} onClick={() => setCollectionView('articles')}><BookOpen /> Люди та історії</button></nav></section>{showingArticles ? <section className="exhibit-grid article-grid" aria-live="polite">{articles.length ? articles.map((article, index) => <button className="exhibit-card article-card" key={article.id} onClick={() => setSelectedArticle(article)} type="button"><span className="model-tile article-tile">{article.cover ? <img src={assetUrl(article.cover)} alt="" /> : <BookOpen />}</span><span className="card-copy"><small>{article.category || 'ІСТОРІЯ'} · {String(index + 1).padStart(2, '0')}</small><strong>{article.title}</strong><span>{article.subtitle || 'Відкрити матеріал'}<ChevronRight /></span></span></button>) : <div className="empty-collection"><BookOpen /><h2>Історії ще готуються</h2><p>Працівники музею можуть додати першу статтю через панель керування.</p></div>}</section> : <section className="exhibit-grid" aria-live="polite">{exhibits.map((exhibit, index) => <button className="exhibit-card" key={exhibit.id} onClick={() => setSelected(exhibit)} type="button"><span className="model-tile"><ModelPreview exhibit={exhibit} /></span><span className="card-copy"><small>{exhibit.category} · {String(index + 1).padStart(2, '0')}</small><strong>{exhibit.title}</strong><span>{exhibit.period}<ChevronRight /></span></span></button>)}</section>}<footer className="museum-footer"><span>КОРЕЦЬКИЙ ІСТОРИЧНИЙ МУЗЕЙ</span><span className="touch-hint"><Hand /> {showingArticles ? 'Торкніться картки, щоб прочитати' : 'Торкніться предмета, щоб відкрити 3D'}</span></footer></main>;
+  return <main className="museum-shell catalog-shell"><header className="museum-header"><Brand linked /><div className="header-actions"><span className="collection-count">{showingArticles ? articles.length : exhibits.length} {showingArticles ? 'ІСТОРІЙ' : 'ЕКСПОНАТІВ'}</span>{fullscreenButton}<Button variant="ghost" size="icon-lg" className="header-icon" onClick={openAdmin} aria-label="Відкрити панель адміністратора"><Settings2 /></Button></div></header><section className="catalog-intro" id="catalog"><div><p className="eyebrow">{showingArticles ? 'ЛЮДИ, ПОДІЇ ТА ІСТОРІЯ КОРЦЯ' : 'КОРЕЦЬКА ПОРЦЕЛЯНА ТА КЕРАМІКА'}</p><h1>{showingArticles ? 'Люди та історії' : 'Колекція посуду'}</h1></div><nav className="catalog-tabs" aria-label="Розділи колекції"><button className={!showingArticles ? 'active' : ''} onClick={() => setCollectionView('exhibits')}><Box /> 3D-колекція</button><button className={showingArticles ? 'active' : ''} onClick={() => setCollectionView('articles')}><BookOpen /> Люди та історії</button></nav></section>{showingArticles ? <section className="exhibit-grid article-grid" aria-live="polite">{articles.length ? articles.map((article, index) => <button className="exhibit-card article-card" key={article.id} onClick={() => setSelectedArticle(article)} type="button"><span className="model-tile article-tile">{article.cover ? <img src={assetUrl(article.cover)} alt="" /> : <BookOpen />}</span><span className="card-copy"><small>{article.category || 'ІСТОРІЯ'} · {String(index + 1).padStart(2, '0')}</small><strong>{article.title}</strong><span>Відкрити матеріал<ChevronRight /></span></span></button>) : <div className="empty-collection"><BookOpen /><h2>Історії ще готуються</h2><p>Працівники музею можуть додати першу статтю через панель керування.</p></div>}</section> : <section className="exhibit-grid" aria-live="polite">{exhibits.map((exhibit, index) => <button className="exhibit-card" key={exhibit.id} onClick={() => setSelected(exhibit)} type="button"><span className="model-tile"><ModelPreview exhibit={exhibit} /></span><span className="card-copy"><small>{exhibit.category} · {String(index + 1).padStart(2, '0')}</small><strong>{exhibit.title}</strong><span>{exhibit.period}<ChevronRight /></span></span></button>)}</section>}<footer className="museum-footer"><span>КОРЕЦЬКИЙ ІСТОРИЧНИЙ МУЗЕЙ</span><span className="touch-hint"><Hand /> {showingArticles ? 'Торкніться картки, щоб прочитати' : 'Торкніться предмета, щоб відкрити 3D'}</span></footer></main>;
 }

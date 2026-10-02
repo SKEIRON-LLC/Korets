@@ -96,13 +96,15 @@ function validateArticle(item, existingId) {
     if (!block || typeof block !== 'object') return null;
     const type = String(block.type || '');
     const id = /^[a-zA-Z0-9-]{1,80}$/.test(String(block.id || '')) ? String(block.id) : randomUUID();
+    if (type === 'markdown') return { id, type, text: String(block.text || '').trim().slice(0, 12000) };
     if (type === 'heading') return { id, type, text: String(block.text || '').trim().slice(0, 240) };
     if (type === 'paragraph') return { id, type, text: String(block.text || '').trim().slice(0, 6000) };
     if (type === 'quote') return { id, type, text: String(block.text || '').trim().slice(0, 1800) };
     if (type === 'image') {
       const image = normalizeAsset(block.image);
       if (!image || !validImage(image)) return null;
-      return { id, type, image, caption: String(block.caption || '').trim().slice(0, 400) };
+      const layout = ['full', 'left', 'right'].includes(block.layout) ? block.layout : 'full';
+      return { id, type, image, layout, caption: String(block.caption || '').trim().slice(0, 400), text: String(block.text || '').trim().slice(0, 12000) };
     }
     return null;
   }).filter(Boolean);
